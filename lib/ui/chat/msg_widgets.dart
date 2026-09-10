@@ -1504,6 +1504,98 @@ Widget _webSearchSummaryBlock(
   );
 }
 
+/// MCP/Skill 工具输出的解析摘要(用户裁定:有解析过的摘要即可)。
+/// [entries] 非空 = 顶层键值摘要;[text] 非空 = MCP content 文本。
+class ToolTextSummary {
+  final List<MapEntry<String, String>>? entries;
+  final String? text;
+
+  const ToolTextSummary.entries(this.entries) : text = null;
+  const ToolTextSummary.text(this.text) : entries = null;
+}
+
+/// 解析 MCP/Skill 工具输出(容错,失败返回 null 回落原文):
+/// - MCP 结果形状 {content: [{type:'text', text:...}]} → 拼接文本;
+/// - 其他 JSON 对象 → 顶层键值摘要(值截断);JSON 数组 → 逐行拼接。
+@visibleForTesting
+ToolTextSummary? parseMcpSkillSummary(String outputText) {
+  final trimmed = outputText.trim();
+  if (trimmed.isEmpty) return null;
+  Object? decoded;
+  try {
+    decoded = jsonDecode(trimmed);
+  } catch (_) {
+    return null;
+  }
+  String compact(Object? v) {
+    if (v == null) return 'null';
+    if (v is String) return v;
+    return jsonEncode(v);
+  }
+
+  if (decoded is Map) {
+    final contentList = decoded['content'];
+    if (contentList is List) {
+      // MCP 标准结果形状:content[].type == 'text' 的 text 拼接。
+      final texts = <String>[];
+      for (final item in contentList) {
+        if (item is Map && item['type'] == 'text' && item['text'] is String) {
+          texts.add(item['text'] as String);
+        }
+      }
+      if (texts.isNotEmpty) return ToolTextSummary.text(texts.join('\n'));
+    }
+    final entries = <MapEntry<String, String>>[
+      for (final e in decoded.entries)
+        MapEntry(e.key.toString(), compact(e.value)),
+    ];
+    if (entries.isNotEmpty) return ToolTextSummary.entries(entries);
+    return null;
+  }
+  if (decoded is List) {
+    return ToolTextSummary.text(
+        decoded.map(compact).join('\n'));
+  }
+  return null;
+}
+
+/// MCP/Skill 摘要块:键值行或文本段落。
+Widget _toolTextSummaryBlock(BuildContext context, ToolTextSummary summary) {
+  final e = EmberColors.of(context);
+  final entries = summary.entries;
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (summary.text != null)
+          Text(summary.text!,
+              style: TextStyle(
+                  fontSize: 11.5, height: 1.5, color: e.textSoft)),
+        for (final entry in (entries ?? const <MapEntry<String, String>>[]))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${entry.key}: ',
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: e.textSoft)),
+                Expanded(
+                  child: Text(entry.value,
+                      style: TextStyle(
+                          fontSize: 11.5, color: e.textSoft)),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 /// 工具调用块。Ember look matches [_ReasoningTile]: tile one step
 /// darker than card, 10pt radius, 3px rail colored by status (success→ok,
 /// error→err, running→run). The tool name is a standalone caption row
@@ -1568,6 +1660,15 @@ class _ToolCallTileState extends State<_ToolCallTile> {
     final isWebSearch = toolName.toLowerCase().contains('websearch') ||
         toolName.toLowerCase().contains('web_search');
     final webSearch = isWebSearch ? parseWebSearchSummary(outputText) : null;
+
+    /// MCP/Skill 工具:输出解析为摘要(用户裁定)——MCP content 文本
+    /// 或顶层键值摘要;解析失败回落原始文本。
+    final isMcpOrSkill = toolName.toLowerCase().contains('mcp') ||
+        toolName.toLowerCase().contains('skill');
+    final mcpSummary = (!isBash && todoSteps == null && webSearch == null &&
+            (isMcpOrSkill || outputText.contains('"content":[')))
+        ? parseMcpSkillSummary(outputText)
+        : null;
 
     final (icon, color) = switch (status) {
       'running' || 'inputStreaming' || 'pendingApproval' => (
@@ -1693,6 +1794,8 @@ class _ToolCallTileState extends State<_ToolCallTile> {
                 _todoStepsBlock(context, todoSteps)
               else if (webSearch != null)
                 _webSearchSummaryBlock(context, webSearch)
+              else if (mcpSummary != null)
+                _toolTextSummaryBlock(context, mcpSummary)
               else if (outputText.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),

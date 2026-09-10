@@ -226,6 +226,31 @@ void main() {
     });
   });
 
+  group('parseMcpSkillSummary(MCP/Skill 输出解析,纯函数)', () {
+    test('MCP content 形状:{content: [{type: text, text}]} 拼接文本', () {
+      final s = parseMcpSkillSummary(
+          '{"content": [{"type": "text", "text": "第一段"}, {"type": "text", "text": "第二段"}]}');
+      expect(s, isNotNull);
+      expect(s!.text, '第一段\n第二段');
+      expect(s.entries, isNull);
+    });
+
+    test('JSON 对象:顶层键值摘要(嵌套值紧凑截断)', () {
+      final s = parseMcpSkillSummary(
+          '{"server": "files", "count": 3, "nested": {"a": 1}}');
+      expect(s, isNotNull);
+      expect(s!.entries, hasLength(3));
+      expect(s.entries![0].key, 'server');
+      expect(s.entries![0].value, 'files');
+      expect(s.entries![2].value, '{"a":1}');
+    });
+
+    test('非 JSON 返回 null(回落原文)', () {
+      expect(parseMcpSkillSummary('纯文本输出'), isNull);
+      expect(parseMcpSkillSummary(''), isNull);
+    });
+  });
+
   group('parseWebSearchSummary(WebSearch 输出解析,纯函数)', () {
     test('JSON bare 数组:提取 title/url/snippet', () {
       final s = parseWebSearchSummary(
