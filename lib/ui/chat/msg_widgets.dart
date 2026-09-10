@@ -1352,6 +1352,158 @@ List<Uint8List> collectToolImages(Map<String, dynamic> row, String outputText) {
   return out;
 }
 
+/// WebSearch 输出的解析摘要(用户裁定:有解析过的摘要即可)。
+class WebSearchSummary {
+  final String? query;
+
+  /// 每条:{title, url, snippet}(均可空字符串)。
+  final List<Map<String, String>> items;
+
+  /// 无结构化条目时的答案/正文文本(如 {answer: "..."} 形状)。
+  final String? answerText;
+
+  const WebSearchSummary(
+      {this.query, required this.items, this.answerText});
+}
+
+/// 容错解析 WebSearch 工具输出:兼容 JSON(bare 数组 / results|data|
+/// items 包裹;条目取 title/url/snippet|content|description)与纯文本
+/// (含 URL 的行视作一条结果)。解析不出结构返回 null(回落原文)。
+@visibleForTesting
+WebSearchSummary? parseWebSearchSummary(String outputText) {
+  final trimmed = outputText.trim();
+  if (trimmed.isEmpty) return null;
+  Object? decoded;
+  try {
+    decoded = jsonDecode(trimmed);
+  } catch (_) {
+    decoded = null;
+  }
+  List<dynamic>? items;
+  String? query;
+  if (decoded is List) {
+    items = decoded;
+  } else if (decoded is Map) {
+    for (final k in const ['results', 'data', 'items', 'searchResults']) {
+      final v = decoded[k];
+      if (v is List && v.isNotEmpty) {
+        items = v;
+        break;
+      }
+    }
+    for (final k in const ['query', 'searchQuery', 'q']) {
+      final v = decoded[k];
+      if (v is String && v.trim().isNotEmpty) {
+        query = v.trim();
+        break;
+      }
+    }
+    if (items == null) {
+      for (final k in const ['answer', 'content', 'summary', 'text']) {
+        final v = decoded[k];
+        if (v is String && v.trim().isNotEmpty) {
+          return WebSearchSummary(
+              query: query, items: const [], answerText: v.trim());
+        }
+      }
+      return null;
+    }
+  }
+  if (items == null || items.isEmpty) {
+    // 纯文本回落:含 URL 的行各视作一条结果(标题=去 URL 后的文字)。
+    final urlRe = RegExp(r'https?://\S+');
+    final rows = <Map<String, String>>[];
+    for (final line in trimmed.split('\n')) {
+      final m = urlRe.firstMatch(line);
+      if (m == null) continue;
+      final url = m.group(0)!;
+      final text = line.replaceAll(url, '').trim();
+      rows.add({
+        'title': text.isEmpty ? url : text,
+        'url': url,
+        'snippet': '',
+      });
+    }
+    return rows.isEmpty ? null : WebSearchSummary(items: rows);
+  }
+  final rows = <Map<String, String>>[];
+  for (final item in items) {
+    if (item is! Map) continue;
+    String str(Object? v) => v?.toString().trim() ?? '';
+    rows.add({
+      'title': str(item['title']).isNotEmpty
+          ? str(item['title'])
+          : str(item['url']),
+      'url': str(item['url']),
+      'snippet': str(item['snippet'] ?? item['content'] ?? item['description']),
+    });
+  }
+  return rows.isEmpty ? null : WebSearchSummary(query: query, items: rows);
+}
+
+/// WebSearch 结果摘要块(解析成功时替换原始输出):查询词 + 逐条
+/// 标题/摘要/链接。
+Widget _webSearchSummaryBlock(
+    BuildContext context, WebSearchSummary summary) {
+  final e = EmberColors.of(context);
+  final hasItems = summary.items.isNotEmpty;
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (summary.query != null && summary.query!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text('搜索：${summary.query}',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: e.textSoft)),
+          ),
+        if (!hasItems && (summary.answerText ?? '').isNotEmpty)
+          Text(summary.answerText!,
+              style: TextStyle(
+                  fontSize: 11.5, height: 1.5, color: e.textSoft)),
+        for (final item in summary.items)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item['title'] ?? '',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: e.textSolid)),
+                if ((item['snippet'] ?? '').isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(item['snippet']!,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11, color: e.textMuted)),
+                  ),
+                if ((item['url'] ?? '').isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(item['url']!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            fontFamily: EmberFonts.term,
+                            color: e.run)),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
 /// 工具调用块。Ember look matches [_ReasoningTile]: tile one step
 /// darker than card, 10pt radius, 3px rail colored by status (success→ok,
 /// error→err, running→run). The tool name is a standalone caption row
@@ -1411,6 +1563,11 @@ class _ToolCallTileState extends State<_ToolCallTile> {
         isBash || !_todoPlanToolName.hasMatch(toolName)
             ? null
             : todoStepsOf(row);
+
+    /// WebSearch 工具:输出解析为搜索结果摘要(用户裁定)。
+    final isWebSearch = toolName.toLowerCase().contains('websearch') ||
+        toolName.toLowerCase().contains('web_search');
+    final webSearch = isWebSearch ? parseWebSearchSummary(outputText) : null;
 
     final (icon, color) = switch (status) {
       'running' || 'inputStreaming' || 'pendingApproval' => (
@@ -1534,6 +1691,8 @@ class _ToolCallTileState extends State<_ToolCallTile> {
                   _kv(context, '输出', outputText, accent),
               ] else if (todoSteps != null)
                 _todoStepsBlock(context, todoSteps)
+              else if (webSearch != null)
+                _webSearchSummaryBlock(context, webSearch)
               else if (outputText.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),

@@ -649,8 +649,17 @@ class SessionDrawerController {
     try {
       final res = await source.bridge.channels.call(Channels.zcodeTask,
           method, [args ?? taskArgs(entry.sessionId, scope: source.scope)]);
-      // 无 status 直接返回保持兼容;明确 rejected 走错误提示。
-      if (isRpcRejected(res)) throw Exception(rpcFailureReason(res));
+      // 管理操作(归档/置顶/重命名/删除)的响应形状宿主各版本不一,
+      // 桌面端亦不检查响应形状——操作是否生效以随后的会话索引刷新为
+      // 准。只有明确 rejected/stale(或无 status 却带 error)才报错,
+      // 避免「实际归档成功却弹归档失败」的误报(真机反馈)。
+      final status = rpcStatusOf(res);
+      final hasError = res is Map && res['error'] != null;
+      if (status == 'rejected' ||
+          status == 'stale' ||
+          (hasError && status == null)) {
+        throw Exception(rpcFailureReason(res));
+      }
     } catch (e) {
       if (!isCurrentActionSource(source, entry.sessionId) ||
           managementGeneration != _managementGeneration) {

@@ -226,6 +226,44 @@ void main() {
     });
   });
 
+  group('parseWebSearchSummary(WebSearch 输出解析,纯函数)', () {
+    test('JSON bare 数组:提取 title/url/snippet', () {
+      final s = parseWebSearchSummary(
+          '[{"title":"结果一","url":"https://a.com","snippet":"摘要"},'
+          '{"title":"结果二","url":"https://b.com"}]');
+      expect(s, isNotNull);
+      expect(s!.items, hasLength(2));
+      expect(s.items[0]['title'], '结果一');
+      expect(s.items[0]['snippet'], '摘要');
+      expect(s.items[1]['url'], 'https://b.com');
+    });
+
+    test('JSON {results: [...]} 包裹 + query', () {
+      final s = parseWebSearchSummary(
+          '{"query":"zflow 协议","results":[{"title":"R1","url":"https://x.com"}]}');
+      expect(s, isNotNull);
+      expect(s!.query, 'zflow 协议');
+      expect(s.items.single['title'], 'R1');
+    });
+
+    test('JSON {answer: "..."} 形状给出 answerText', () {
+      final s = parseWebSearchSummary('{"answer":"最好的选择是 X"}');
+      expect(s, isNotNull);
+      expect(s!.items, isEmpty);
+      expect(s.answerText, '最好的选择是 X');
+    });
+
+    test('纯文本:含 URL 的行解析为结果;无 URL 无结构返回 null', () {
+      final s = parseWebSearchSummary(
+          'Zflow 发布页 https://github.com/g0spel/zflow/releases\n官方文档 https://example.com/docs');
+      expect(s, isNotNull);
+      expect(s!.items, hasLength(2));
+      expect(s.items[0]['url'], 'https://github.com/g0spel/zflow/releases');
+      expect(s.items[0]['title'], contains('Zflow 发布页'));
+      expect(parseWebSearchSummary('完全普通的一段文字'), isNull);
+    });
+  });
+
   group('buildElicitationContent(问题表单提交 content,桌面契约)', () {
     final questions = [
       {
