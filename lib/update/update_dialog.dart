@@ -73,13 +73,20 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       final dir = await apkChannel.invokeMethod<String>('getApkDir');
       final file = File('$dir/Zflow-${widget.info.latestVersion}.apk');
       // Partial files are kept for resume; a corrupt download is caught by
-      // the checksum step (which deletes the file) and retried fresh.
-      await _download(apkUrl, file.path, (p) {
-        if (mounted) setState(() => _progress = p);
-      });
+      // the checksum step — which deletes the file and retries fresh once
+      // (自愈:断点错位/文件损坏不再卡死用户), then fails for real.
+      var verified = await _downloadAndVerify(apkUrl, file);
       if (!mounted) return;
-      final verified = await _verifyChecksum(file);
-      if (!mounted) return;
+      if (!verified) {
+        if (mounted) {
+          setState(() => _progress = 0);
+        }
+        if (file.existsSync()) file.deleteSync();
+        await _downloadAndVerify(apkUrl, file);
+        if (!mounted) return;
+        verified = await _verifyChecksum(file);
+        if (!mounted) return;
+      }
       if (!verified) {
         file.deleteSync();
         setState(() {
@@ -103,6 +110,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         });
       }
     }
+  }
+
+  /// 下载 + SHA-256 校验;进度经 [onProgress] 上抛。
+  Future<bool> _downloadAndVerify(
+      String apkUrl, File file) async {
+    await _download(apkUrl, file.path, (p) {
+      if (mounted) setState(() => _progress = p);
+    });
+    if (!mounted) return false;
+    return _verifyChecksum(file);
   }
 
   Future<bool?> _askEnableInstall() {
@@ -146,6 +163,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       if (start > 0) request.headers['Range'] = 'bytes=$start-';
       final res = await client.send(request);
       final resumed = res.statusCode == 206;
+      if (res.statusCode == 416 && start > 0) {
+        // bytes=<start>- beyond EOF:本地文件已完整(上次下载完成但
+        // 校验/安装环节失败保留了下来)——无需再下载,直接交给校验。
+        onProgress(1);
+        return;
+      }
       if (res.statusCode != 200 && !resumed) {
         throw HttpException('HTTP ${res.statusCode}');
       }
