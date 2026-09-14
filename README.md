@@ -31,6 +31,8 @@ Zflow 在手机上管理你的桌面 ZCode:扫码添加设备 → 连接 → 任
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [贡献](#贡献)
+- [Changelog](#changelog)
+- [致谢](#致谢)
 - [来源与迭代](#来源与迭代)
 
 ## 界面总览
@@ -230,6 +232,12 @@ docs/                         # 设计规范 / 设计图
 ## License
 
 [MIT](LICENSE)
+
+## 致谢
+
+- [HumanAILoop/zemote](https://github.com/HumanAILoop/zemote) — 本项目的上游起点,协议层与之同源;
+- [pjpv/zremote](https://github.com/pjpv/zremote) — 其桌面客户端镜像形态的交互设计,为 v1.1.x 的后台保活、通知管理与多处界面改进提供了参考;
+- [LINUX DO](https://linux.do) 社区 — 灵感与反馈来源。
 
 ## 免责声明
 
